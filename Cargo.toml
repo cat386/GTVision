@@ -1,0 +1,37 @@
+[package]
+name = "gtvision"
+version = "0.1.0"
+edition = "2021"
+description = "Turbo Vision (tvision-rs) в графическом окне: тот же API, Windows / macOS / Linux"
+license = "MIT"
+
+# Ядро Turbo Vision и графический backend включены в этот крейт.
+[dependencies]
+
+# Кроссплатформенное окно и события (Win32 / Cocoa / X11 / Wayland).
+winit = "0.30"
+# Вывод готового кадра в окно без GPU (просто массив пикселей).
+softbuffer = "0.4"
+# Растеризация шрифтов TrueType/OpenType (чистый Rust).
+fontdue = "0.9"
+
+[lib]
+name = "gtvision"
+path = "src/lib.rs"
+
+[[example]]
+name = "hello"
+
+[[example]]
+name = "tvedit"
+
+[[example]]
+name = "tvdemo"
+path = "examples/tvdemo/main.rs"
+
+[features]
+sqlite = []
+
+[[example]]
+name = "sqlite_query"
+required-features = ["sqlite"]

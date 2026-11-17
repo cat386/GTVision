@@ -1,0 +1,211 @@
+//! Настройки графического окна.
+
+use std::path::PathBuf;
+
+/// Стандартная палитра VGA (текстовый режим 3): 16 цветов BIOS в формате
+/// `0x00RRGGBB`. Порядок — как в атрибутах BIOS: 0 чёрный, 1 синий,
+/// 2 зелёный, 3 бирюзовый, 4 красный, 5 малиновый, 6 коричневый,
+/// 7 светло-серый, 8–15 — яркие варианты.
+pub const VGA_PALETTE: [u32; 16] = [
+    0x000000, 0x0000AA, 0x00AA00, 0x00AAAA, 0xAA0000, 0xAA00AA, 0xAA5500, 0xAAAAAA, //
+    0x555555, 0x5555FF, 0x55FF55, 0x55FFFF, 0xFF5555, 0xFF55FF, 0xFFFF55, 0xFFFFFF,
+];
+
+/// 16 цветов терминальной темы [gruvbox](https://github.com/morhetz/gruvbox)
+/// (тёмной) в порядке BIOS — палитра окна **по умолчанию**. Сама программа
+/// по умолчанию рисуется палитрой `color::palettes::GRUVBOX` (256 цветов);
+/// эти 16 цветов видны там, где атрибут задан цветом BIOS (например, у
+/// классической палитры `APP_COLOR`).
+pub const GRUVBOX_PALETTE: [u32; 16] = gtvision::color::GRUVBOX_RGB;
+
+/// Параметры окна. Создаётся через [`GuiConfig::new`] и методы-«строители»:
+///
+/// ```
+/// use gtvision::GuiConfig;
+/// let cfg = GuiConfig::new("Редактор").size(100, 30).font_size(18.0);
+/// assert_eq!(cfg.cols, 100);
+/// ```
+#[derive(Clone, Debug)]
+pub struct GuiConfig {
+    /// Заголовок окна.
+    pub title: String,
+    /// Начальная ширина экрана в символах.
+    pub cols: u16,
+    /// Начальная высота экрана в строках.
+    pub rows: u16,
+    /// Размер шрифта в логических пикселях (на HiDPI-экранах умножается
+    /// на масштаб монитора). Определяет высоту символа примерно как у
+    /// терминала с тем же размером шрифта.
+    pub font_size: f32,
+    /// Файл шрифта. `None` — найти моноширинный шрифт в системе.
+    pub font_path: Option<PathBuf>,
+    /// Цвета BIOS 0..15 в формате `0x00RRGGBB`.
+    pub palette: [u32; 16],
+    /// Мигает ли курсор.
+    pub cursor_blink: bool,
+    /// Можно ли менять размер окна мышью.
+    pub resizable: bool,
+    /// Открыть сразу на весь экран.
+    pub fullscreen: bool,
+    /// Тема оформления по названию (см. [`crate::themes`]): задаёт и
+    /// палитру программы, и 16 цветов окна. `None` — палитра программы по
+    /// умолчанию (gruvbox) и палитра окна из поля `palette`.
+    pub theme: Option<String>,
+    /// Положение окна на экране (физические пиксели). `None` — окно ставит
+    /// оконная система.
+    pub position: Option<(i32, i32)>,
+    /// Открыть окно развёрнутым (как кнопкой «Развернуть» в заголовке).
+    pub maximized: bool,
+    /// Сохранять настройки окна в файл и читать их при запуске: тему,
+    /// шрифт и размер шрифта (из [`crate::settings_dialog`]), размер и
+    /// положение окна. Файл — `ИМЯ.conf` рядом с программой (или в профиле
+    /// пользователя, если рядом писать нельзя). Если файла нет, программа
+    /// запускается с настройками из кода. Сохранённые настройки важнее
+    /// значений из кода.
+    pub remember_settings: bool,
+}
+
+impl Default for GuiConfig {
+    fn default() -> Self {
+        // Заголовок по умолчанию — имя исполняемого файла.
+        let title = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.file_stem().map(|s| s.to_string_lossy().into_owned()))
+            .unwrap_or_else(|| "Turbo Vision".to_string());
+        GuiConfig {
+            title,
+            cols: 80,
+            rows: 25,
+            font_size: 16.0,
+            font_path: None,
+            palette: GRUVBOX_PALETTE,
+            cursor_blink: true,
+            resizable: true,
+            fullscreen: false,
+            theme: Some("Gruvbox".into()),
+            position: None,
+            maximized: false,
+            remember_settings: true,
+        }
+    }
+}
+
+impl GuiConfig {
+    /// Настройки по умолчанию (80×25, шрифт 16 px) с заданным заголовком.
+    pub fn new(title: &str) -> Self {
+        GuiConfig { title: title.to_string(), ..Default::default() }
+    }
+
+    /// Начальный размер экрана в символах.
+    pub fn size(mut self, cols: u16, rows: u16) -> Self {
+        self.cols = cols.max(1);
+        self.rows = rows.max(1);
+        self
+    }
+
+    /// Размер шрифта в логических пикселях.
+    pub fn font_size(mut self, px: f32) -> Self {
+        self.font_size = px.clamp(4.0, 200.0);
+        self
+    }
+
+    /// Файл шрифта (.ttf / .otf / .ttc).
+    pub fn font(mut self, path: impl Into<PathBuf>) -> Self {
+        self.font_path = Some(path.into());
+        self
+    }
+
+    /// Своя палитра из 16 цветов `0x00RRGGBB`.
+    pub fn palette(mut self, palette: [u32; 16]) -> Self {
+        self.palette = palette;
+        self
+    }
+
+    /// Включить или выключить мигание курсора.
+    pub fn cursor_blink(mut self, on: bool) -> Self {
+        self.cursor_blink = on;
+        self
+    }
+
+    /// Разрешить или запретить изменение размера окна.
+    pub fn resizable(mut self, on: bool) -> Self {
+        self.resizable = on;
+        self
+    }
+
+    /// Открыть окно на весь экран.
+    pub fn fullscreen(mut self, on: bool) -> Self {
+        self.fullscreen = on;
+        self
+    }
+
+    /// Тема оформления по названию (см. [`crate::themes`]).
+    ///
+    /// ```
+    /// use gtvision::GuiConfig;
+    /// let cfg = GuiConfig::new("Программа").theme("Классическая");
+    /// assert_eq!(cfg.theme.as_deref(), Some("Классическая"));
+    /// ```
+    pub fn theme(mut self, name: &str) -> Self {
+        self.theme = Some(name.to_string());
+        self
+    }
+
+    /// Положение окна на экране в физических пикселях.
+    pub fn position(mut self, x: i32, y: i32) -> Self {
+        self.position = Some((x, y));
+        self
+    }
+
+    /// Открыть окно развёрнутым.
+    pub fn maximized(mut self, on: bool) -> Self {
+        self.maximized = on;
+        self
+    }
+
+    /// Запоминать ли настройки, выбранные в диалоге настроек.
+    pub fn remember_settings(mut self, on: bool) -> Self {
+        self.remember_settings = on;
+        self
+    }
+
+    /// Применяет сохранённые настройки пользователя (если включено
+    /// `remember_settings` и файл настроек есть) и тему: палитра окна
+    /// берётся из темы.
+    pub(crate) fn with_saved(mut self) -> Self {
+        if self.remember_settings {
+            if let Some(s) = crate::gui_settings::GuiSettings::load() {
+                if s.theme.is_some() {
+                    self.theme = s.theme;
+                }
+                self.font_path = s.font;
+                self = self.font_size(s.font_size);
+                if let Some(g) = s.window {
+                    self = self.size(g.cols, g.rows);
+                    self.position = g.position;
+                    self.maximized = g.maximized;
+                    self.fullscreen = g.fullscreen;
+                }
+            }
+        }
+        if let Some(t) = self.theme.as_deref().and_then(crate::gui_settings::find_theme) {
+            self.palette = t.window_palette;
+        }
+        self
+    }
+
+    /// Применяет переменные окружения `TVISION_GUI_FONT` и
+    /// `TVISION_GUI_FONT_SIZE` (они важнее настроек из кода, чтобы
+    /// пользователь мог поменять шрифт без перекомпиляции).
+    pub(crate) fn with_env(mut self) -> Self {
+        if let Ok(p) = std::env::var("TVISION_GUI_FONT") {
+            if !p.is_empty() {
+                self.font_path = Some(PathBuf::from(p));
+            }
+        }
+        if let Some(px) = std::env::var("TVISION_GUI_FONT_SIZE").ok().and_then(|s| s.trim().parse::<f32>().ok()) {
+            self = self.font_size(px);
+        }
+        self
+    }
+}
