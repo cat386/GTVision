@@ -23,6 +23,19 @@ fn mouse(pos: Point, buttons: u8) -> event::MouseEvent {
 }
 
 #[test]
+fn dialog_header_has_only_close_control() {
+    let mut app = Program::new(Box::new(MaterialBackend(HeadlessBackend::new(80, 30))), None, None);
+    app.insert_window(Dialog::centered(40, 15, "Dialog"));
+    app.redraw();
+    let flags = app.screen().scene.iter().find_map(|paint| match paint {
+        material::Paint::Widget { kind: material::Kind::Window { flags, .. }, .. } => Some(*flags),
+        _ => None,
+    }).unwrap();
+    assert_ne!(flags & wf::CLOSE, 0);
+    assert_eq!(flags & (wf::ZOOM | wf::MINIMIZE), 0);
+}
+
+#[test]
 fn minimize_restore_and_resize_preserve_contents_and_child_geometry() {
     let mut window = Window::new(Rect::new(2, 3, 52, 23), "Profile", 1);
     let mut input = InputLine::new(Rect::new(3, 4, 30, 6), 100);

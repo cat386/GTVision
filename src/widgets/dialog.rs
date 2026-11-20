@@ -27,7 +27,7 @@ impl Dialog {
     pub fn new(bounds: Rect, title: &str) -> Self {
         let mut win = Window::new(bounds, title, 0);
         win.group.vs.grow_mode = 0;
-        win.flags = wf::MOVE | wf::CLOSE | wf::ZOOM | wf::MINIMIZE;
+        win.flags = wf::MOVE | wf::CLOSE;
         win.palette = palettes::GRAY_DIALOG;
         Dialog { win }
     }

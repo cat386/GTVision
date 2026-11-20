@@ -25,6 +25,21 @@ impl BoxPx {
 }
 
 impl Renderer {
+    fn widget_offset(&self, scene: &[Paint], bounds: Rect) -> i32 {
+        let header = self.header_widget_offset(scene, bounds);
+        if header != 0 {
+            return header;
+        }
+        if scene.iter().rev().any(|paint| matches!(paint,
+            Paint::Widget { bounds: window, kind: Kind::Window { .. }, .. }
+                if bounds.a.y > window.a.y && bounds.b.y <= window.b.y
+                    && bounds.a.x >= window.a.x && bounds.b.x <= window.b.x)) {
+            (5.0 * (self.font.px / 16.0).max(0.25)).round() as i32
+        } else {
+            0
+        }
+    }
+
     fn header_widget_offset(&self, scene: &[Paint], bounds: Rect) -> i32 {
         scene.iter().rev().find_map(|paint| match paint {
             Paint::Widget { bounds: window, kind: Kind::Window { .. }, .. }
@@ -42,10 +57,10 @@ impl Renderer {
         for (index, paint) in frame.screen.scene.iter().enumerate().rev() {
             let Paint::Widget { bounds, clip, kind, .. } = paint else { continue };
             if !matches!(kind, Kind::Window { .. }) {
-                let offset = self.header_widget_offset(&frame.screen.scene[..index], *bounds);
+                let offset = self.widget_offset(&frame.screen.scene[..index], *bounds);
                 let logical = (point.0, point.1 - offset as f32);
                 if offset != 0 && self.px_box(*clip).contains(logical) {
-                    return Some(Point::new((logical.0 / self.cell_w() as f32) as i32, bounds.a.y));
+                    return Some(Point::new((logical.0 / self.cell_w() as f32) as i32, (logical.1 / self.cell_h() as f32) as i32));
                 }
             }
             if !self.px_box(*clip).contains(point) {
@@ -91,9 +106,9 @@ impl Renderer {
         let scale = (self.font.px / 16.0).max(0.25);
         BoxPx {
             x: r.x + 12.0 * scale,
-            y: r.y + 4.0 * scale,
+            y: r.y + 7.0 * scale,
             w: (r.w - 24.0 * scale).max(0.0),
-            h: (self.cell_h() as f32 + 20.0 * scale).min(r.h - 5.0 * scale).max(0.0),
+            h: (self.cell_h() as f32 + 20.0 * scale).min(r.h - 8.0 * scale).max(0.0),
         }
     }
 
@@ -104,16 +119,28 @@ impl Renderer {
             match paint {
                 Paint::Cell { pos, cell } => self.material_cell(*pos, *cell, None, false),
                 Paint::Widget { bounds, clip, kind, cells } => {
+                    self.material_header = !matches!(kind, Kind::Window { .. })
+                        && self.header_widget_offset(&frame.screen.scene[..index], *bounds) != 0;
                     self.material_offset_y = if matches!(kind, Kind::Window { .. }) { 0 } else {
-                        self.header_widget_offset(&frame.screen.scene[..index], *bounds)
+                        self.widget_offset(&frame.screen.scene[..index], *bounds)
                     };
                     let hover = self.hover;
                     self.hover = hover.map(|(x, y)| (x, y - self.material_offset_y as f32));
                     let c = self.px_box(*clip);
                     self.material_clip = (c.x as i32, c.y as i32, (c.x + c.w) as i32, (c.y + c.h) as i32);
+                    if self.material_offset_y != 0 && !self.material_header {
+                        if let Some(bottom) = frame.screen.scene[..index].iter().rev().find_map(|paint| match paint {
+                            Paint::Widget { bounds: window, kind: Kind::Window { .. }, .. }
+                                if window.contains(bounds.a) => Some(window.b.y * self.cell_h() as i32),
+                            _ => None,
+                        }) {
+                            self.material_clip.3 = self.material_clip.3.min(bottom - self.material_offset_y);
+                        }
+                    }
                     self.material_widget(*bounds, *clip, kind, cells);
                     self.hover = hover;
                     self.material_offset_y = 0;
+                    self.material_header = false;
                     self.material_clip = (0, 0, self.width as i32, self.height as i32);
                 }
             }
@@ -133,7 +160,7 @@ impl Renderer {
                 if let Some(bounds) = input {
                     let r = self.px_box(bounds);
                     y = r.y + (r.h - self.cell_h() as f32) / 2.0
-                        + self.header_widget_offset(&frame.screen.scene, bounds) as f32;
+                        + self.widget_offset(&frame.screen.scene, bounds) as f32;
                 }
                 let x = pos.x as f32 * self.cell_w() as f32;
                 self.round_box(BoxPx { x, y: y + 4.0, w: 2.0, h: (self.cell_h() as f32 - 8.0).max(2.0) }, 1.0, m::PRIMARY, 255);
@@ -208,7 +235,7 @@ impl Renderer {
                 if *enabled && (hover || *pressed || *focused) {
                     self.round_box(shape, shape.h / 2.0, ink, if *pressed { 31 } else { 20 });
                 }
-                let label_bounds = if self.material_offset_y != 0 {
+                let label_bounds = if self.material_header {
                     BoxPx { x: shape.x + 8.0 * scale, w: (shape.w - 16.0 * scale).max(0.0), ..shape }
                 } else {
                     shape.inset(8.0 * scale)
@@ -216,6 +243,7 @@ impl Renderer {
                 self.text_size(label, label_bounds, ink, true, self.font.px * 0.875);
             }
             Kind::Input { focused, enabled } => {
+                let r = BoxPx { x: r.x + scale, w: (r.w - 2.0 * scale).max(0.0), ..r };
                 self.round_box(r.inset(scale), 4.0 * scale, m::CONTAINER_HIGH, 255);
                 let ink = if *focused && *enabled { m::PRIMARY } else { m::OUTLINE };
                 let stroke = if *focused { 2.0 } else { 1.0 } * scale;
@@ -474,7 +502,7 @@ impl Renderer {
     }
 
     fn text_size(&mut self, text: &str, r: BoxPx, color: u32, centered: bool, px: f32) {
-        let px = if self.material_offset_y != 0 { px * 0.85 } else { px };
+        let px = if self.material_header { px * 0.85 } else { px };
         if r.w <= 0.0 || r.h <= 0.0 {
             return;
         }
@@ -557,6 +585,35 @@ fn is_frame(c: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn window_body_moves_five_dp_with_matching_mouse_coordinates() {
+        for font_size in [16.0, 32.0] {
+            let font = crate::font::FontSet::load(None, font_size);
+            let mut renderer = Renderer::new(font, crate::GRUVBOX_PALETTE);
+            renderer.resize(renderer.cell_w() * 40, renderer.cell_h() * 12);
+            let bounds = Rect::new(1, 1, 39, 11);
+            let widget = Rect::new(5, 4, 20, 6);
+            let mut screen = crate::ScreenBuffer::new(40, 12);
+            screen.material = true;
+            screen.scene.push(Paint::Widget { bounds, clip: bounds, cells: Vec::new(), kind: Kind::Window {
+                title: String::new(), active: true, flags: crate::wf::CLOSE,
+                title_end: 30, zoomed: false, minimized: false,
+            }});
+            let offset = renderer.widget_offset(&screen.scene, widget);
+            assert_eq!(offset, (5.0 * font_size / 16.0) as i32);
+            screen.scene.push(Paint::Widget { bounds: widget, clip: widget, cells: Vec::new(), kind: Kind::Button {
+                label: String::new(), primary: true, pressed: false, enabled: true, focused: false,
+            }});
+            let frame = Frame { screen, cursor: None, insert: false };
+            renderer.update(&frame, false);
+            let x = 12 * renderer.cell_w();
+            let y = 5 * renderer.cell_h() + offset as usize;
+            assert_eq!(renderer.pixels()[y * renderer.width + x], m::PRIMARY);
+            let point = (x as f32, (6 * renderer.cell_h() + offset as usize - 1) as f32);
+            assert_eq!(renderer.header_control_at(Some(&frame), point), Some(Point::new(12, 5)));
+        }
+    }
 
     #[test]
     fn header_widget_render_and_hit_area_share_the_header_center() {
