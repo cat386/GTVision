@@ -25,17 +25,36 @@ impl BoxPx {
 }
 
 impl Renderer {
+    fn header_widget_offset(&self, scene: &[Paint], bounds: Rect) -> i32 {
+        scene.iter().rev().find_map(|paint| match paint {
+            Paint::Widget { bounds: window, kind: Kind::Window { .. }, .. }
+                if window.a.y == bounds.a.y && bounds.a.x >= window.a.x && bounds.b.x <= window.b.x => {
+                let band = self.header_band(self.px_box(*window));
+                Some((band.y + band.h / 2.0 - (bounds.a.y as f32 + 0.5) * self.cell_h() as f32).round() as i32)
+            }
+            _ => None,
+        }).unwrap_or(0)
+    }
+
     /// Переводит точное попадание в сдвинутую кнопку в её логическую область.
     pub fn header_control_at(&self, frame: Option<&Frame>, point: (f32, f32)) -> Option<Point> {
         let frame = frame.filter(|frame| frame.screen.material)?;
-        for paint in frame.screen.scene.iter().rev() {
+        for (index, paint) in frame.screen.scene.iter().enumerate().rev() {
             let Paint::Widget { bounds, clip, kind, .. } = paint else { continue };
+            if !matches!(kind, Kind::Window { .. }) {
+                let offset = self.header_widget_offset(&frame.screen.scene[..index], *bounds);
+                let logical = (point.0, point.1 - offset as f32);
+                if offset != 0 && self.px_box(*clip).contains(logical) {
+                    return Some(Point::new((logical.0 / self.cell_w() as f32) as i32, bounds.a.y));
+                }
+            }
             if !self.px_box(*clip).contains(point) {
                 continue;
             }
             let Kind::Window { flags, .. } = kind else { return None };
+            let band = self.header_band(self.px_box(*bounds));
             let y = bounds.a.y as f32 * self.cell_h() as f32;
-            if point.1 >= y + self.cell_h() as f32 {
+            if point.1 >= (band.y + band.h).max(y + self.cell_h() as f32) {
                 return None;
             }
             let buttons = crate::widgets::window::header_buttons(bounds.width(), *flags);
@@ -45,6 +64,8 @@ impl Renderer {
                 let mut pixels = self.px_box(rect.moved(bounds.a.x, bounds.a.y));
                 old_button |= pixels.contains(point);
                 pixels.x -= shift;
+                pixels.y = band.y;
+                pixels.h = band.h;
                 if pixels.contains(point) {
                     return Some(Point::new(bounds.a.x + (rect.a.x + rect.b.x) / 2, bounds.a.y));
                 }
@@ -66,16 +87,33 @@ impl Renderer {
         }
     }
 
+    fn header_band(&self, r: BoxPx) -> BoxPx {
+        let scale = (self.font.px / 16.0).max(0.25);
+        BoxPx {
+            x: r.x + 12.0 * scale,
+            y: r.y + 4.0 * scale,
+            w: (r.w - 24.0 * scale).max(0.0),
+            h: (self.cell_h() as f32 + 20.0 * scale).min(r.h - 5.0 * scale).max(0.0),
+        }
+    }
+
     pub(super) fn update_material(&mut self, frame: &Frame, cursor_on: bool) {
         self.pixels.fill(m::SURFACE);
         self.material_clip = (0, 0, self.width as i32, self.height as i32);
-        for paint in &frame.screen.scene {
+        for (index, paint) in frame.screen.scene.iter().enumerate() {
             match paint {
                 Paint::Cell { pos, cell } => self.material_cell(*pos, *cell, None, false),
                 Paint::Widget { bounds, clip, kind, cells } => {
+                    self.material_offset_y = if matches!(kind, Kind::Window { .. }) { 0 } else {
+                        self.header_widget_offset(&frame.screen.scene[..index], *bounds)
+                    };
+                    let hover = self.hover;
+                    self.hover = hover.map(|(x, y)| (x, y - self.material_offset_y as f32));
                     let c = self.px_box(*clip);
                     self.material_clip = (c.x as i32, c.y as i32, (c.x + c.w) as i32, (c.y + c.h) as i32);
                     self.material_widget(*bounds, *clip, kind, cells);
+                    self.hover = hover;
+                    self.material_offset_y = 0;
                     self.material_clip = (0, 0, self.width as i32, self.height as i32);
                 }
             }
@@ -94,7 +132,8 @@ impl Renderer {
                 let mut y = pos.y as f32 * self.cell_h() as f32;
                 if let Some(bounds) = input {
                     let r = self.px_box(bounds);
-                    y = r.y + (r.h - self.cell_h() as f32) / 2.0;
+                    y = r.y + (r.h - self.cell_h() as f32) / 2.0
+                        + self.header_widget_offset(&frame.screen.scene, bounds) as f32;
                 }
                 let x = pos.x as f32 * self.cell_w() as f32;
                 self.round_box(BoxPx { x, y: y + 4.0, w: 2.0, h: (self.cell_h() as f32 - 8.0).max(2.0) }, 1.0, m::PRIMARY, 255);
@@ -113,25 +152,19 @@ impl Renderer {
                 let radius = (28.0 * scale).min(r.h / 4.0).min(r.w / 4.0);
                 self.round_box(r, radius, m::OUTLINE_VARIANT, 255);
                 self.round_box(r.inset(scale), radius, m::CONTAINER, 255);
-                let title_h = self.cell_h() as f32;
-                let band = BoxPx {
-                    x: r.x + 12.0 * scale,
-                    y: r.y + 4.0 * scale,
-                    w: (r.w - 24.0 * scale).max(0.0),
-                    h: (title_h + 4.0 * scale).min(r.h - 5.0 * scale).max(0.0),
-                };
+                let band = self.header_band(r);
                 self.round_box(band, 16.0 * scale, m::CONTAINER_HIGH, 255);
                 self.text_size(
                     title,
                     BoxPx {
                         x: r.x + self.cell_w() as f32 * 2.0,
-                        y: r.y,
+                        y: band.y,
                         w: ((*title_end - 2).max(0) as f32 * self.cell_w() as f32).min(r.w),
-                        h: title_h,
+                        h: band.h,
                     },
                     if *active { m::ON_SURFACE } else { m::ON_SURFACE_VARIANT },
                     false,
-                    self.font.px * 1.25,
+                    self.font.px * 1.1,
                 );
                 let buttons = crate::widgets::window::header_buttons(bounds.width(), *flags);
                 for (rect, icon) in [
@@ -142,6 +175,8 @@ impl Renderer {
                     if let Some(rect) = rect {
                         let mut icon_rect = self.px_box(rect.moved(bounds.a.x, bounds.a.y));
                         icon_rect.x -= HEADER_BUTTON_SHIFT * scale;
+                        icon_rect.y = band.y;
+                        icon_rect.h = band.h;
                         self.icon_button(icon_rect, icon, hover);
                     }
                 }
@@ -173,7 +208,12 @@ impl Renderer {
                 if *enabled && (hover || *pressed || *focused) {
                     self.round_box(shape, shape.h / 2.0, ink, if *pressed { 31 } else { 20 });
                 }
-                self.text_size(label, shape.inset(8.0 * scale), ink, true, self.font.px * 0.875);
+                let label_bounds = if self.material_offset_y != 0 {
+                    BoxPx { x: shape.x + 8.0 * scale, w: (shape.w - 16.0 * scale).max(0.0), ..shape }
+                } else {
+                    shape.inset(8.0 * scale)
+                };
+                self.text_size(label, label_bounds, ink, true, self.font.px * 0.875);
             }
             Kind::Input { focused, enabled } => {
                 self.round_box(r.inset(scale), 4.0 * scale, m::CONTAINER_HIGH, 255);
@@ -417,7 +457,7 @@ impl Renderer {
             self.line((x - size / 2.0, y - size / 2.0), (x + size / 2.0, y + size / 2.0), 1.5, m::ON_SURFACE_VARIANT);
             self.line((x + size / 2.0, y - size / 2.0), (x - size / 2.0, y + size / 2.0), 1.5, m::ON_SURFACE_VARIANT);
         } else if icon == "minimize" {
-            self.line((x - size / 2.0, y + size / 4.0), (x + size / 2.0, y + size / 4.0), 1.5, m::ON_SURFACE_VARIANT);
+            self.line((x - size / 2.0, y), (x + size / 2.0, y), 1.5, m::ON_SURFACE_VARIANT);
         } else {
             let square = BoxPx { x: x - size / 2.0, y: y - size / 2.0, w: size, h: size };
             if icon == "restore" {
@@ -434,6 +474,7 @@ impl Renderer {
     }
 
     fn text_size(&mut self, text: &str, r: BoxPx, color: u32, centered: bool, px: f32) {
+        let px = if self.material_offset_y != 0 { px * 0.85 } else { px };
         if r.w <= 0.0 || r.h <= 0.0 {
             return;
         }
@@ -467,6 +508,10 @@ impl Renderer {
     fn pixel(&mut self, x: i32, y: i32, color: u32, alpha: u8) {
         let (left, top, right, bottom) = self.material_clip;
         if alpha == 0 || x < left.max(0) || y < top.max(0) || x >= right.min(self.width as i32) || y >= bottom.min(self.height as i32) {
+            return;
+        }
+        let y = y + self.material_offset_y;
+        if y < 0 || y >= self.height as i32 {
             return;
         }
         let index = y as usize * self.width + x as usize;
@@ -514,6 +559,36 @@ mod tests {
     use super::*;
 
     #[test]
+    fn header_widget_render_and_hit_area_share_the_header_center() {
+        for font_size in [16.0, 32.0] {
+            let font = crate::font::FontSet::load(None, font_size);
+            let mut renderer = Renderer::new(font, crate::GRUVBOX_PALETTE);
+            renderer.resize(renderer.cell_w() * 40, renderer.cell_h() * 10);
+            let bounds = Rect::new(1, 1, 39, 9);
+            let widget = Rect::new(15, 1, 25, 2);
+            let mut screen = crate::ScreenBuffer::new(40, 10);
+            screen.material = true;
+            screen.scene.push(Paint::Widget { bounds, clip: bounds, cells: Vec::new(), kind: Kind::Window {
+                title: "Title".into(), active: true, flags: crate::wf::CLOSE,
+                title_end: 14, zoomed: false, minimized: false,
+            }});
+            screen.scene.push(Paint::Widget { bounds: widget, clip: widget, cells: Vec::new(), kind: Kind::Button {
+                label: String::new(), primary: true, pressed: false, enabled: true, focused: false,
+            }});
+            let offset = renderer.header_widget_offset(&screen.scene[..1], widget);
+            let band = renderer.header_band(renderer.px_box(bounds));
+            let pixels = renderer.px_box(widget);
+            assert!((pixels.y + pixels.h / 2.0 + offset as f32 - band.y - band.h / 2.0).abs() <= 0.5);
+            let frame = Frame { screen, cursor: None, insert: false };
+            renderer.update(&frame, false);
+            let point = (pixels.x + pixels.w / 2.0, pixels.y + pixels.h - 1.0 + offset as f32);
+            assert_eq!(renderer.header_control_at(Some(&frame), point), Some(Point::new(20, 1)));
+            let center = (band.y + band.h / 2.0) as usize * renderer.width + (pixels.x + pixels.w / 2.0) as usize;
+            assert_eq!(renderer.pixels()[center], m::PRIMARY);
+        }
+    }
+
+    #[test]
     fn shifted_header_buttons_hit_their_visual_bounds_at_each_scale() {
         for font_size in [16.0, 32.0] {
             let font = crate::font::FontSet::load(None, font_size);
@@ -531,11 +606,14 @@ mod tests {
             let frame = Frame { screen, cursor: None, insert: false };
             let buttons = crate::widgets::window::header_buttons(bounds.width(), flags);
             let shift = HEADER_BUTTON_SHIFT * font_size / 16.0;
+            let band = renderer.header_band(renderer.px_box(bounds));
             for rect in [buttons.close, buttons.zoom, buttons.minimize].into_iter().flatten() {
                 let pixels = renderer.px_box(rect.moved(bounds.a.x, bounds.a.y));
                 let point = (pixels.x - shift + 0.5, pixels.y + pixels.h / 2.0);
                 let expected = Point::new(bounds.a.x + (rect.a.x + rect.b.x) / 2, bounds.a.y);
                 assert_eq!(renderer.header_control_at(Some(&frame), point), Some(expected));
+                let bottom = (point.0, band.y + band.h - 0.5);
+                assert_eq!(renderer.header_control_at(Some(&frame), bottom), Some(expected));
             }
             let close = renderer.px_box(buttons.close.unwrap().moved(bounds.a.x, bounds.a.y));
             let empty_edge = (close.x + close.w - 0.5, close.y + close.h / 2.0);

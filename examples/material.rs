@@ -44,7 +44,7 @@ fn app_main() -> std::io::Result<()> {
     let mut window = Window::new(Rect::new(3, 2, 93, 26), "GTVision · Material 3", 1);
     window.flags = wf::MOVE | wf::CLOSE | wf::GROW | wf::ZOOM | wf::MINIMIZE;
     let header_width = window.header_bounds().width();
-    let mut help = Button::new(Rect::new(header_width - 12, 0, header_width - 1, 1), "Помощь", HEADER_HELP, bf::NORMAL);
+    let mut help = Button::new(Rect::new(header_width - 14, 0, header_width - 1, 1), "Помощь", HEADER_HELP, bf::NORMAL);
     help.vs.grow_mode = gf::GROW_LO_X | gf::GROW_HI_X;
     window.add_header(help);
     window.add(StaticText::new(Rect::new(3, 2, 50, 3), "Профиль и уведомления"));

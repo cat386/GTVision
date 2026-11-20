@@ -33,6 +33,7 @@ pub struct Renderer {
     ui_font: FontSet,
     hover: Option<(f32, f32)>,
     material_clip: (i32, i32, i32, i32),
+    material_offset_y: i32,
     palette: [u32; 16],
     /// Размер кадра в пикселях.
     pub width: usize,
@@ -49,7 +50,7 @@ pub struct Renderer {
 impl Renderer {
     pub fn new(font: FontSet, palette: [u32; 16]) -> Self {
         let ui_font = FontSet::material(font.px);
-        Renderer { font, ui_font, hover: None, material_clip: (0, 0, 0, 0), palette, width: 0, height: 0, pixels: Vec::new(), shown: None, cursor_drawn: None, cache: HashMap::new() }
+        Renderer { font, ui_font, hover: None, material_clip: (0, 0, 0, 0), material_offset_y: 0, palette, width: 0, height: 0, pixels: Vec::new(), shown: None, cursor_drawn: None, cache: HashMap::new() }
     }
 
     pub fn cell_w(&self) -> usize {
